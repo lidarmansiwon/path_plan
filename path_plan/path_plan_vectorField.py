@@ -1,7 +1,8 @@
+#!/usr/bin/env python3
 import rclpy, os, math, tf2_ros
 import numpy as np
 import matplotlib.pyplot as plt
-
+from scipy.interpolate import interp1d
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, TransformStamped
 from nav_msgs.msg import Path, Odometry
@@ -31,11 +32,13 @@ class PurePursuitController(Node):
         package_share_directory = get_package_share_directory('path_plan')
         file_path               = os.path.join(package_share_directory, 'path', path_data)
 
+        '''Read and interpolate waypoints'''
         self.path               = self.read_waypoints_from_file(file_path)
-        
+        self.interpolated_path  = self.interpolate_path(self.path) ## 
+
         self.navi_subscription  = self.create_subscription(
             NavigationType,
-            '/navigation',
+            '/pass/navigation',
             self.navigation_callback,
             10
         )
@@ -81,40 +84,49 @@ class PurePursuitController(Node):
         self.publish_desiredData()
         
         self.pop = self.find_point_on_path(self.current_position)
-        print(self.pop)
         self.vis_pop(self.pop)
 
     '''txt파일로부터 전역 경로 생성'''
     def read_waypoints_from_file(self, file_path):
-        if not self.scale:
-            return
         waypoints = []
         with open(file_path, 'r') as file:
             for line in file:
                 x, y = map(float, line.strip().split())
-                x = x*self.scale
-                y = y*self.scale
+                x = x * self.scale
+                y = y * self.scale
                 waypoints.append([-y, x])
         return np.array(waypoints)
+
+    '''기존 point의 경로를 통해 spline 매끄러운 경로 생성'''
+    def interpolate_path(self, path, num_points=10000):
+        x = path[:, 0]
+        y = path[:, 1]
+        
+        t = np.linspace(0, 1, len(path))
+        fx = interp1d(t, x, kind='linear')
+        fy = interp1d(t, y, kind='linear')
+        
+        # Generate new points for the interpolated path
+        t_new = np.linspace(0, 1, num_points)
+        x_new = fx(t_new)
+        y_new = fy(t_new)
+        
+        interpolated_path = np.vstack((x_new, y_new)).T
+        return interpolated_path
 
     '''경유점 최신화(범위안에 목표지점이 들어올 경우 다음 목적지 추종)'''
     def find_point_on_path(self, current_position):
         if not self.lookahead_distance:
             return
-        for i in range(self.current_index, len(self.path)):
-            waypoint = self.path[i]
+        for i in range(self.current_index, len(self.interpolated_path)):
+            waypoint = self.interpolated_path[i]
             distance = np.linalg.norm(waypoint - current_position)
             if distance >= self.lookahead_distance:
                 self.current_index = i 
                 return waypoint
-        return self.path[-1]
+        return self.interpolated_path[-1]
 
-    '''(선박-목표지점) 벡터 생성'''
-    '''
-    goat_point : 최신화된 경유점
-    direction  : 선박으로부터 목표지점으로 이어지는 벡터
-    return     : 단위 벡터 반환
-    '''
+    '''(선박-목표지점) 단위 벡터 생성'''
     def control(self, current_position):
         goal_point = self.find_point_on_path(current_position)
         direction = goal_point - current_position 
@@ -124,7 +136,7 @@ class PurePursuitController(Node):
         self.navigation_data = msg
 
     def boat_callback(self, msg):
-        self.boat_data       = msg
+        self.boat_data = msg
 
     def update_boat_state(self):
         if not hasattr(self, 'previous_odom_msg'):
@@ -135,7 +147,7 @@ class PurePursuitController(Node):
         self.x   = self.navigation_data.x
         self.y   = self.navigation_data.y
         
-        self.current_position   = np.array([self.x,self.y])
+        self.current_position = np.array([self.x, self.y])
 
     def publish_desiredData(self):
         if self.boat_data is None:
@@ -145,40 +157,32 @@ class PurePursuitController(Node):
         desired_x     = self.pop[0]
         desired_y     = self.pop[1] 
         vector_d      = np.array([desired_x - ship_position[0], desired_y - ship_position[1]])
-        psi_d         = np.arctan2(vector_d[1], vector_d[0]) * (180/math.pi)
+        psi_d         = np.arctan2(vector_d[1], vector_d[0]) * (180 / math.pi)
 
-        '''Gudiance Message Creating'''
-        '''
-        desired_psi : 전역 좌표계 기준 psi_d
-        desired_u   : x축 방향 목표 속도 (파라미터)
-        error_psi   : 전역 좌표계 기준 error_psi (psi_d - psi)
-        distance    : 선박과 목표지점 사이의 거리
-        x_waypoint  : 목표지점 (x축)
-        y_waypoint  : 목표지점 (y축)
-        '''
-        desired_publisher             = GuidanceType()
+        '''Guidance Message Creating'''
+        desired_publisher = GuidanceType()
         desired_publisher.desired_psi = psi_d
         desired_publisher.desired_u   = self.desired_u
         desired_publisher.error_psi   = psi_d - self.navigation_data.psi
         desired_publisher.error_u     = self.desired_u - self.navigation_data.u
-        desired_publisher.distance    = math.sqrt(vector_d[0]**2 + vector_d[1]**2)
+        desired_publisher.distance    = np.linalg.norm(vector_d)
         desired_publisher.x_waypoint  = desired_x
         desired_publisher.y_waypoint  = desired_y
         desired_publisher.goback_flag = 0
         self.desiredData_publisher.publish(desired_publisher)
 
         '''World Map // Ship Map - TF Visualization'''
-        transform_position                           = TransformStamped()
-        transform_position.header.stamp              = self.get_clock().now().to_msg()
-        transform_position.header.frame_id           = 'map'
-        transform_position.child_frame_id            = 'ship'
-        transform_position.transform.translation.x   = ship_position[0]
-        transform_position.transform.translation.y   = ship_position[1]
-        rotation                                     = transform_position.transform.rotation
-        rotation.x                                   = self.boat_data.pose.pose.orientation.x
-        rotation.y                                   = self.boat_data.pose.pose.orientation.y
-        rotation.z                                   = self.boat_data.pose.pose.orientation.z
-        rotation.w                                   = self.boat_data.pose.pose.orientation.w
+        transform_position = TransformStamped()
+        transform_position.header.stamp = self.get_clock().now().to_msg()
+        transform_position.header.frame_id = 'map'
+        transform_position.child_frame_id = 'ship'
+        transform_position.transform.translation.x = ship_position[0]
+        transform_position.transform.translation.y = ship_position[1]
+        rotation = transform_position.transform.rotation
+        rotation.x = self.boat_data.pose.pose.orientation.x
+        rotation.y = self.boat_data.pose.pose.orientation.y
+        rotation.z = self.boat_data.pose.pose.orientation.z
+        rotation.w = self.boat_data.pose.pose.orientation.w
 
         self.tf_broadcaster.sendTransform(transform_position)
         self.visualize_arrow(ship_position, np.array([desired_x, desired_y]))
@@ -219,7 +223,7 @@ class PurePursuitController(Node):
         path_msg.header.frame_id = 'map'
         path_msg.header.stamp = self.get_clock().now().to_msg()
 
-        for point in self.path:
+        for point in self.interpolated_path:
             pose = PoseStamped()
             pose.pose.position.x = point[0]
             pose.pose.position.y = point[1]
