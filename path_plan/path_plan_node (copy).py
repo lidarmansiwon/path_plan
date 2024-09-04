@@ -31,7 +31,6 @@ class PurePursuitController(Node):
         self.lookahead_distance = self.get_parameter('lookahead_distance').value
         self.scale              = self.get_parameter('scale').value
         self.desired_u          = 0.7
-        self.error_psi_d        = 0
         # self.desired_u          = self.get_parameter('desired_u').value
 
         package_share_directory = get_package_share_directory('path_plan')
@@ -91,6 +90,7 @@ class PurePursuitController(Node):
                 self.data_check += 1
             return
 
+        
         self.update_boat_state()
         self.publish_desiredData()
         
@@ -162,7 +162,7 @@ class PurePursuitController(Node):
         desired_y     = self.pop[1] 
         vector_d      = np.array([desired_x - ship_position[0], desired_y - ship_position[1]])
         psi_d         = np.arctan2(vector_d[1], vector_d[0]) * (180/math.pi)
-        self.error_psi_d = ssa(psi_d - self.navigation_data.psi)
+        
 
         '''Gudiance Message Creating'''
         '''
@@ -174,51 +174,51 @@ class PurePursuitController(Node):
         y_waypoint  : 목표지점 (y축)
         '''
         desired_publisher             = GuidanceType()
-        desired_publisher.desired_psi = round(psi_d, 2)
-        desired_publisher.desired_u   = round(self.desired_u, 2)
-        desired_publisher.error_psi   = round(self.error_psi_d, 2)
-        desired_publisher.error_u     = round(self.desired_u - self.navigation_data.u, 2)
-        desired_publisher.distance    = round(math.sqrt(vector_d[0]**2 + vector_d[1]**2), 2)
-        desired_publisher.x_waypoint  = round(desired_x, 2)
-        desired_publisher.y_waypoint  = round(desired_y, 2)
+        desired_publisher.desired_psi = psi_d
+        desired_publisher.desired_u   = self.desired_u
+        desired_publisher.error_psi   = ssa(psi_d - self.navigation_data.psi)
+        desired_publisher.error_u     = self.desired_u - self.navigation_data.u
+        desired_publisher.distance    = math.sqrt(vector_d[0]**2 + vector_d[1]**2)
+        desired_publisher.x_waypoint  = desired_x
+        desired_publisher.y_waypoint  = desired_y
         desired_publisher.goback_flag = 0
         self.desiredData_publisher.publish(desired_publisher)
 
-        # '''World Map // Ship Map - TF Visualization'''
-        # transform_position                           = TransformStamped()
-        # transform_position.header.stamp              = self.get_clock().now().to_msg()
-        # transform_position.header.frame_id           = 'map'
-        # transform_position.child_frame_id            = 'ship'
-        # transform_position.transform.translation.x   = ship_position[0]
-        # transform_position.transform.translation.y   = ship_position[1]
-        # rotation                                     = transform_position.transform.rotation
-        # rotation.x                                   = self.boat_data.orientation.x
-        # rotation.y                                   = self.boat_data.orientation.y
-        # rotation.z                                   = self.boat_data.orientation.z
-        # rotation.w                                   = self.boat_data.orientation.w
+        '''World Map // Ship Map - TF Visualization'''
+        transform_position                           = TransformStamped()
+        transform_position.header.stamp              = self.get_clock().now().to_msg()
+        transform_position.header.frame_id           = 'map'
+        transform_position.child_frame_id            = 'ship'
+        transform_position.transform.translation.x   = ship_position[0]
+        transform_position.transform.translation.y   = ship_position[1]
+        rotation                                     = transform_position.transform.rotation
+        rotation.x                                   = self.boat_data.orientation.x
+        rotation.y                                   = self.boat_data.orientation.y
+        rotation.z                                   = self.boat_data.orientation.z
+        rotation.w                                   = self.boat_data.orientation.w
 
-        # self.tf_broadcaster.sendTransform(transform_position)
+        self.tf_broadcaster.sendTransform(transform_position)
         self.visualize_arrow(ship_position, np.array([desired_x, desired_y]))
     
     '''Psi_d Visualization // Marker.arrow'''
     def visualize_arrow(self, start, end):
         marker = Marker()
-        marker.header.frame_id = "camera_init"
+        marker.header.frame_id = "map"
         marker.header.stamp = self.get_clock().now().to_msg()
         marker.id = 2
         marker.type = Marker.ARROW
         marker.action = Marker.ADD
         marker.pose.position.x = start[0]
-        marker.pose.position.y = -start[1]
+        marker.pose.position.y = start[1]
         marker.pose.position.z = 0.0
 
         dx = end[0] - start[0]
-        dy = -end[1] + start[1]
+        dy = end[1] - start[1]
 
         marker.pose.orientation.x = 0.0
         marker.pose.orientation.y = 0.0
-        marker.pose.orientation.z = np.sin(self.error_psi_d / 2.0)
-        marker.pose.orientation.w = np.cos(self.error_psi_d / 2.0)
+        marker.pose.orientation.z = np.sin(np.arctan2(dy, dx) / 2.0)
+        marker.pose.orientation.w = np.cos(np.arctan2(dy, dx) / 2.0)
 
         marker.scale.x = np.sqrt(dx**2 + dy**2)  # Arrow Length
         marker.scale.y = 0.1                      # Arrow width
@@ -233,7 +233,7 @@ class PurePursuitController(Node):
 
     def publish_path(self):
         path_msg = Path()
-        path_msg.header.frame_id = 'camera_init'
+        path_msg.header.frame_id = 'map'
         path_msg.header.stamp = self.get_clock().now().to_msg()
 
         for point in self.path:
@@ -248,7 +248,7 @@ class PurePursuitController(Node):
     '''목표 경유점 시각화'''
     def vis_pop(self, pop):
         pop_vis = Marker()
-        pop_vis.header.frame_id = "camera_init"
+        pop_vis.header.frame_id = "map"
         pop_vis.header.stamp = self.get_clock().now().to_msg()
         pop_vis.id = 1
         pop_vis.type = Marker.SPHERE

@@ -9,7 +9,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'param_file',
-            default_value='/home/sw/ros2_ws/src/path_plan/config/param.yaml',
+            default_value='/home/macroorin3/pass_ws/src/path_plan/config/param.yaml',
             description='Path to the parameter file'
         ),
     
@@ -25,6 +25,6 @@ def generate_launch_description():
             executable='rviz2',
             name='rviz2',
             output='screen',
-            arguments=['-d', '/home/sw/ros2_ws/src/path_plan/rviz/rviz.rviz']
+            arguments=['-d', '/home/macroorin3/pass_ws/src/path_plan/rviz/rviz2.rviz']
         ),
     ])

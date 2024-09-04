@@ -3,4 +3,4 @@
     path_data: 'path.txt'
     lookahead_distance: 0.3
     scale: 1.5
-    desired_u: 0.0
+    desired_u: 1.0
