@@ -28,6 +28,7 @@ setup(
             'path_plan_node  = path_plan.path_plan_node:main',
             'ppnavi_plan     = path_plan.ppnavi_plan:main',
             'global_path_planner = path_plan.global_path_planner:main',
+            'global_path_planner2 = path_plan.global_path_planner2:main',
             'path_plan_vectorField = path_plan.path_plan_vectorField:main',
             'vf_example      = path_plan.vf_example:main',
             'dynamic_launch  = path_plan.dynamic_launch:main'

@@ -4,7 +4,7 @@ import matplotlib.pyplot as plt
 import os
 from rclpy.node import Node
 from std_msgs.msg import Bool
-from geometry_msgs.msg import PoseStamped, TransformStamped,Point
+from geometry_msgs.msg import PoseStamped, TransformStamped,Point, PointStamped
 from nav_msgs.msg import Path, Odometry,OccupancyGrid
 from ament_index_python.packages import get_package_share_directory
 from mk3_msgs.msg import GuidanceType, NavigationType, WaypointType,PsiToWP
@@ -29,7 +29,7 @@ class GlobalPathPlanner(Node):
         self.declare_parameter('lookahead_distance', 0.6)
         self.declare_parameter('scale', 1.0)
         self.declare_parameter('desired_u', 0.8)
-
+        
         self.boundary_cost = self.get_parameter('boundary_cost').value
         self.lookahead_distance = self.get_parameter('lookahead_distance').value
         self.scale              = self.get_parameter('scale').value
@@ -37,20 +37,18 @@ class GlobalPathPlanner(Node):
 
         package_share_directory = get_package_share_directory('path_plan')
         
-        package_share_directory = get_package_share_directory('path_plan')
-        file_path_1               = os.path.join(package_share_directory, 'path', 'path1.txt')
-        file_path_2               = os.path.join(package_share_directory, 'path', 'path2.txt')
-        file_path_3               = os.path.join(package_share_directory, 'path', 'path3.txt')
-        file_path_4               = os.path.join(package_share_directory, 'path', 'path4.txt')
-        file_path_5               = os.path.join(package_share_directory, 'path', 'path5.txt')
-        self.path1               = self.read_waypoints_from_file(file_path_1)
-        self.path2               = self.read_waypoints_from_file(file_path_2)
-        self.path3               = self.read_waypoints_from_file(file_path_3)
-        self.path4               = self.read_waypoints_from_file(file_path_4)
-        self.path5               = self.read_waypoints_from_file(file_path_5)
+        file_path_1             = os.path.join(package_share_directory, 'path', 'path1.txt')
+        file_path_2             = os.path.join(package_share_directory, 'path', 'path2.txt')
+        file_path_3             = os.path.join(package_share_directory, 'path', 'path3.txt')
+        file_path_4             = os.path.join(package_share_directory, 'path', 'path4.txt')
+        file_path_5             = os.path.join(package_share_directory, 'path', 'path5.txt')
+        self.path1              = self.read_waypoints_from_file(file_path_1)
+        self.path2              = self.read_waypoints_from_file(file_path_2)
+        self.path3              = self.read_waypoints_from_file(file_path_3)
+        self.path4              = self.read_waypoints_from_file(file_path_4)
+        self.path5              = self.read_waypoints_from_file(file_path_5)
 
-        self.current_path        = self.path1
-        self.paths               = [self.path1,self.path2,self.path3,self.path4,self.path5]
+        self.paths              = [self.path1,self.path2,self.path3,self.path4,self.path5]
         qos_profile = qos_profile_sensor_data
         self.path_state_subscription      = self.create_subscription(
             Bool,
@@ -79,6 +77,13 @@ class GlobalPathPlanner(Node):
             self.occupancy_grid_callback,
             10
         )
+        
+        self.point_subscription = self.create_subscription(
+            PointStamped,
+            '/clicked_point',  # RViz에서 Publish된 Point
+            self.point_callback,
+            10
+        )        
         self.current_state: Pose = Pose()
 
         self.data_check          = 0
@@ -88,6 +93,8 @@ class GlobalPathPlanner(Node):
         self.local_map           = None
         self.boat_data           = None
         self.path_state          = True
+        self.select_mode         = True  # True for selection, False for updating
+        self.selected_index      = None
         self.pop                 = np.zeros(2)
         self.current_position    = np.array([0.0, 0.0])
         self.error_psi_d         = 0
@@ -102,6 +109,10 @@ class GlobalPathPlanner(Node):
         self.ob_publisher          = self.create_publisher(MarkerArray, '/close_objects', 10)
         self.publisher = self.create_publisher(MarkerArray, '/objects', 10)
 
+        self.waypoints_file_path = os.path.join(package_share_directory, 'path', 'path1.txt')
+        self.current_path        = self.path1
+        self.last_modified_time  = os.path.getmtime(self.waypoints_file_path)
+        
         self.marker_id = 0
 
         self.current_index = 0
@@ -109,6 +120,17 @@ class GlobalPathPlanner(Node):
 
     def process(self):
         self.publish_path(self.current_path)
+        
+        ''' Checking the time when text1.txt was modified --> renewal the path simultaneously  '''
+        current_modified_time = os.path.getmtime(self.waypoints_file_path)
+        
+        if current_modified_time != self.last_modified_time:
+            self.get_logger().error("test1.txt파일의 waypoint가 최신화되었음 --> 경유점 변경 완료")
+            self.last_modified_time = current_modified_time
+            self.current_path = self.read_waypoints_from_file(self.waypoints_file_path)
+            self.publish_path(self.current_path)
+        ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
+        
         if (self.navigation_data is None or (self.local_map is None)):
             if self.start_check == False:
                 print("\033[33m" + " --> " + "\033[0m" + "\033[31m" + "'navigation_data'" + "\033[0m" + "\033[33m" + " doesn't arrived yet" + "\033[0m")
@@ -128,7 +150,69 @@ class GlobalPathPlanner(Node):
         self.vis_pop(self.pop)
         self.vis_nextWP(self.nextWP)
     
+    def point_callback(self, msg: PointStamped):
+        # 클릭한 좌표 가져오기
+        clicked_x = msg.point.x
+        clicked_y = msg.point.y
+        clicked_point = np.array([clicked_x, -clicked_y])
 
+        if self.select_mode:
+            # 첫 번째 클릭: 경로 상에서 가장 가까운 좌표 찾기
+            nearest_index, nearest_point = self.find_nearest_waypoint(clicked_point)
+
+            if nearest_point is not None:
+                # 선택된 경유점을 저장
+                self.selected_index = nearest_index
+                self.get_logger().info(f"선택한 Waypoint : {nearest_index}번째 {nearest_point}")
+                self.get_logger().warn("Waypoint를 변경할 위치를 선택하십시오. (Publish Point 활용)")
+                self.select_mode = False  # Switch to update mode
+
+        else:
+            # 두 번째 클릭: 선택된 경유점을 새로운 클릭된 좌표로 업데이트
+            if self.selected_index is not None:
+                self.current_path[self.selected_index] = clicked_point
+                self.get_logger().info(f"업데이트된 {self.selected_index}번째 Waypoint // 변경된 위치: {clicked_point}")
+                self.selected_index = None  # Reset the selected index
+                self.select_mode = True  # Switch back to selection mode
+
+                # 업데이트된 경로 다시 Publish
+                self.publish_path(self.current_path)
+                
+                self.write_waypoints_to_file(self.current_path)
+                
+            else:
+                self.get_logger().warn("No waypoint selected to update. Please click to select a waypoint first.")
+        
+    def write_waypoints_to_file(self, waypoints):
+        try:
+            with open(self.waypoints_file_path, 'w') as file:
+                for waypoint in waypoints:
+                    file.write(f"{waypoint[0]} {waypoint[1]}\n")
+
+            self.get_logger().warn(f"txt파일 저장 경로 : {self.waypoints_file_path}")
+
+        except Exception as e:
+            self.get_logger().error(f"Failed to write waypoints to file: {e}")
+
+        
+    def find_nearest_waypoint(self, clicked_point):
+        """
+        경로 상의 좌표 중에서 클릭한 좌표와 가장 가까운 좌표를 찾는다.
+        """
+        min_distance = float('inf')
+        nearest_index = None
+        nearest_point = None
+        
+        # 경로의 각 좌표와 클릭된 좌표의 거리를 계산
+        for i, waypoint in enumerate(self.current_path):
+            distance = np.linalg.norm(waypoint - clicked_point)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_index = i
+                nearest_point = waypoint
+
+        self.get_logger().info(f"Nearest waypoint to clicked point is {nearest_index} at distance {min_distance}")
+        return nearest_index, nearest_point
 
     def select_best_path(self):
         """
