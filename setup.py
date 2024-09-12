@@ -29,6 +29,7 @@ setup(
             'ppnavi_plan     = path_plan.ppnavi_plan:main',
             'global_path_planner = path_plan.global_path_planner:main',
             'global_path_planner2 = path_plan.global_path_planner2:main',
+            'global_path_planner3 = path_plan.global_path_planner_ver2:main',
             'path_plan_vectorField = path_plan.path_plan_vectorField:main',
             'vf_example      = path_plan.vf_example:main',
             'dynamic_launch  = path_plan.dynamic_launch:main'
