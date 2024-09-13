@@ -3,7 +3,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 from rclpy.node import Node
-from std_msgs.msg import Bool ,Int32
+from std_msgs.msg import Bool ,Int32, Int64
 from geometry_msgs.msg import PoseStamped, TransformStamped,Point, PointStamped
 from nav_msgs.msg import Path, Odometry,OccupancyGrid
 from ament_index_python.packages import get_package_share_directory
@@ -34,37 +34,29 @@ class GlobalPathPlanner(Node):
         self.lookahead_distance = self.get_parameter('lookahead_distance').value
         self.scale              = self.get_parameter('scale').value
         self.desired_u          = self.get_parameter('desired_u').value
-
         package_share_directory = get_package_share_directory('path_plan')
-        
         file_path_1             = os.path.join(package_share_directory, 'path', 'path1.txt')
-        file_path_2             = os.path.join(package_share_directory, 'path', 'path2.txt')
-        file_path_3             = os.path.join(package_share_directory, 'path', 'path3.txt')
-        file_path_4             = os.path.join(package_share_directory, 'path', 'path4.txt')
-        file_path_5             = os.path.join(package_share_directory, 'path', 'path5.txt')
         self.path1              = self.read_waypoints_from_file(file_path_1)
-        self.path2              = self.read_waypoints_from_file(file_path_2)
-        self.path3              = self.read_waypoints_from_file(file_path_3)
-        self.path4              = self.read_waypoints_from_file(file_path_4)
-        self.path5              = self.read_waypoints_from_file(file_path_5)
-##########################################Dock path###########################################################
         self.file_Dock1         = os.path.join(package_share_directory, 'path', 'dockpath_1.txt')
         self.file_Dock2         = os.path.join(package_share_directory, 'path', 'dockpath_2.txt')
         self.file_Dock3         = os.path.join(package_share_directory, 'path', 'dockpath_3.txt')
-#######################################Dock path###########################################################
         self.Dock1_path              = self.read_waypoints_from_file(self.file_Dock1)
         self.Dock2_path              = self.read_waypoints_from_file(self.file_Dock2)
         self.Dock3_path              = self.read_waypoints_from_file(self.file_Dock3)
-
-        self.paths              = [self.path1,self.path2,self.path3,self.path4,self.path5]
         qos_profile = qos_profile_sensor_data
 
-
-
-########################################### /path/number, /mode sub ###############################################################
-        self.docknum_subscription = self.create_subscription(Int32, '/path/number', self.dock_number_callback, qos_profile)
-        self.mode_subscription = self.create_subscription(NavigationType,'/mode',self.mode_callback,qos_profile)
-###################################################################################################################################        
+        self.docknum_subscription = self.create_subscription(
+            Int32, 
+            '/path/number', 
+            self.dock_number_callback, 
+            qos_profile)
+        
+        self.mode_subscription = self.create_subscription(
+            Int64,
+            '/mode',
+            self.mode_callback,
+            qos_profile)
+        
         self.path_state_subscription      = self.create_subscription(
             Bool,
             '/path_state',
@@ -103,11 +95,13 @@ class GlobalPathPlanner(Node):
 
         self.data_check          = 0
         self.current_index       = 0
+        self.mode_data           = None
         self.start_check         = False
         self.navigation_data     = None
         self.local_map           = None
         self.boat_data           = None
         self.path_state          = True
+        self.path_data           = None
         self.select_mode         = True  # True for selection, False for updating
         self.selected_index      = None
         self.pop                 = np.zeros(2)
@@ -115,14 +109,13 @@ class GlobalPathPlanner(Node):
         self.error_psi_d         = 0
 
         self.tf_broadcaster        = tf2_ros.TransformBroadcaster(self)
-        self.wayPoint_publisher    = self.create_publisher(WaypointType, '/gpp/waypoint', qos_profile = qos_profile_sensor_data)
-        self.psiToWP_publisher     = self.create_publisher(PsiToWP, '/gpp/WPpsi', qos_profile = qos_profile_sensor_data)
-        self.publisher_            = self.create_publisher(Path, '/gpp/planned_path', 10)
-        self.pop_publisher         = self.create_publisher(Marker, '/gpp/pop',10)
-        self.next_WP_publisher     = self.create_publisher(Marker, '/gpp/next_WP',10)
-        # self.desiredData_publisher = self.create_publisher(GuidanceType, '/guidance', 10)
-        self.ob_publisher          = self.create_publisher(MarkerArray, '/close_objects', 10)
-        self.publisher = self.create_publisher(MarkerArray, '/objects', 10)
+        self.docking_permit_cmd_publisher    = self.create_publisher(Bool, '/gpp/docking_permit_cmd', 10)
+        self.wayPoint_publisher              = self.create_publisher(WaypointType, '/gpp/waypoint', qos_profile = qos_profile_sensor_data)
+        self.wayPoint_publisher              = self.create_publisher(WaypointType, '/gpp/waypoint', qos_profile = qos_profile_sensor_data)
+        self.psiToWP_publisher               = self.create_publisher(PsiToWP, '/gpp/WPpsi', qos_profile = qos_profile_sensor_data)
+        self.publisher_                      = self.create_publisher(Path, '/gpp/planned_path', 10)
+        self.pop_publisher                   = self.create_publisher(Marker, '/gpp/pop',10)
+        self.next_WP_publisher               = self.create_publisher(Marker, '/gpp/next_WP',10)
 
         self.waypoints_file_path = os.path.join(package_share_directory, 'path', 'path1.txt')
         self.current_path        = self.path1
@@ -133,11 +126,13 @@ class GlobalPathPlanner(Node):
         self.current_index = 0
         self.docking_index = 0
         self.timer = self.create_timer(0.01, self.process)
+        self.dock1_Reliability = 0
+        self.dock2_Reliability = 0
+        self.dock3_Reliability = 0
 
-#########################초기화#############################
-        self.path_data = None
-        self.mode_data = None
-###########################################################
+        self.docking_permit_cmd = Bool()
+        self.docking_permit_cmd.data = False
+
 
     def process(self):
         self.publish_path(self.current_path)
@@ -152,7 +147,8 @@ class GlobalPathPlanner(Node):
             self.publish_path(self.current_path)
         ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         
-        if (self.navigation_data is None or (self.local_map is None)):
+        if (self.navigation_data is None or self.local_map is None or self.path_data is None or self.mode_data is None):
+            print(self.path_data, self.mode_data)
             if self.start_check == False:
                 print("\033[33m" + " --> " + "\033[0m" + "\033[31m" + "'navigation_data'" + "\033[0m" + "\033[33m" + " doesn't arrived yet" + "\033[0m")
                 self.start_check = True
@@ -166,37 +162,60 @@ class GlobalPathPlanner(Node):
         
         self.update_boat_state()  
         self.publish_desiredData()
-##############docking 상황 판단을 위한 state update ##########################       
         self.update_docking_state()
         
-######################################################################        
-        if self.mode == 1:   #Autopilot
+        if self.mode == 1:   # Autopilot
             self.pop, self.nextWP = self.find_point_on_path(self.current_position)  ## POP -->> NED
 
         
-        elif self.mode == 3:    #Docking
+        elif self.mode == 3:    # Dock Detection mode 시작 
             """
             Dock num을 받아 Dock num에 맞는 path file 불러온 뒤, 경유점 선정
             """
-            if self.dock_num ==1:
-                self.docking_path = self.Dock1_path
+            self.get_logger().info("Start Dock Detection", once = True)
 
-            elif self.dock_num ==2:
-                self.docking_path = self.Dock2_path
+            # 임계값 설정 (예: 10)
+            reliability_threshold = 10
 
-            elif self.dock_num ==3:
-                self.docking_path = self.Dock3_path
+            # dock_Reliability 값 증가
+            if self.dock_num == 1:
+                self.dock1_Reliability += 1
+            elif self.dock_num == 2:
+                self.dock2_Reliability += 1
+            elif self.dock_num == 3:
+                self.dock3_Reliability += 1
+            elif self.dock_num == -1:
+                return 
+            
+            if self.docking_permit_cmd.data == False:
+                # Reliability가 임계값을 넘는지 확인 후 docking_path 할당
+                if self.dock1_Reliability >= reliability_threshold:
+                    self.docking_path = self.Dock1_path
+                    self.get_logger().info("Dock 1 selected", once=True)
+                    self.docking_permit_cmd.data = True
+                    
+                elif self.dock2_Reliability >= reliability_threshold:
+                    self.docking_path = self.Dock2_path
+                    self.get_logger().info("Dock 2 selected", once=True)
+                    self.docking_permit_cmd.data = True
 
-            else:
-                return
-
-            self.pop, self.nextWP = self.find_dock_point_on_path(self.current_position)## POP -->> NED
+                elif self.dock3_Reliability >= reliability_threshold:
+                    self.docking_path = self.Dock3_path
+                    self.get_logger().info("Dock 3 selected", once=True)
+                    self.docking_permit_cmd.data = True
+                    
+        elif self.mode == 4:
+            """
+            고정된 self.docking_path로 유도 
+            """
+            self.pop, self.nextWP = self.find_dock_point_on_path(self.current_position)  # POP -->> NED
+        
+        self.docking_permit_cmd_publisher.publish(self.docking_permit_cmd)
 
         self.publish_wayPoint(self.pop[0],self.pop[1], self.nextWP[0],self.nextWP[1])
         self.vis_pop(self.pop)
         self.vis_nextWP(self.nextWP)
 
-###################################################################################            
     def find_dock_point_on_path(self,current_position):
         for i in range(self.docking_index, len(self.docking_path) - 1):
             waypoint = self.docking_path[i]
@@ -226,18 +245,17 @@ class GlobalPathPlanner(Node):
             return current_waypoint, next_waypoint
 
         return self.docking_path[-1], self.docking_path[-1]
-########################################################################
-    def dock_number_callback(self,msg):
+    
+    def dock_number_callback(self,msg : Int32):
         self.path_data      = msg
 
    
-    def mode_callback(self,msg):
+    def mode_callback(self,msg : Int64):
         self.mode_data      = msg
 
     def update_docking_state(self):
         self.dock_num       = self.path_data.data
-        self.mode           = self.mode_data.mode
-#######################################################################   
+        self.mode           = self.mode_data.data
 
 
     def point_callback(self, msg: PointStamped):
@@ -304,18 +322,6 @@ class GlobalPathPlanner(Node):
         self.get_logger().info(f"Nearest waypoint to clicked point is {nearest_index} at distance {min_distance}")
         return nearest_index, nearest_point
 
-    def select_best_path(self):
-        """
-        Select the best path based on the lowest cost.
-        """
-        min_cost = float('inf')
-        best_path = self.current_path
-        for path in self.paths:
-            cost = self.calculate_path_cost(path)
-            if cost < min_cost:
-                min_cost = cost
-                best_path = path
-        return best_path
     
     def calculate_path_cost(self, path):
         """
