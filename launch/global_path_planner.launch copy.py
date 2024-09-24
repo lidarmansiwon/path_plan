@@ -20,7 +20,7 @@ def generate_launch_description():
         
         DeclareLaunchArgument(
             'param_file',
-            default_value='/home/macroorin3/pass_ws/src/path_plan/config/param.yaml',
+            default_value='/home/macroorin1/pass_ws/src/path_plan/config/param.yaml',
             description='Path to the parameter file'
         ),
     
@@ -36,6 +36,6 @@ def generate_launch_description():
             executable='rviz2',
             name='rviz2',
             output='screen',
-            arguments=['-d', '/home/macroorin3/pass_ws/src/path_plan/rviz/rviz.rviz']
+            arguments=['-d', '/home/macroorin1/pass_ws/src/path_plan/rviz/rviz.rviz']
         ),
     ])

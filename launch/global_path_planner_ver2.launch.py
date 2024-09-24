@@ -7,7 +7,7 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.substitutions import FindPackageShare
 
 def select_pcd_file():
-    folder_path = '/home/macroorin3/slamMAP'
+    folder_path = '/home/macroorin1/slamMAP'
     pcd_files = [f for f in os.listdir(folder_path) if f.endswith('.pcd')]
 
     if not pcd_files:
@@ -45,7 +45,7 @@ def generate_launch_description():
         
         DeclareLaunchArgument(
             'param_file',
-            default_value='/home/macroorin3/pass_ws/src/path_plan/config/param.yaml',
+            default_value='/home/macroorin1/pass_ws/src/path_plan/config/param.yaml',
             description='Path to the parameter file'
         ),
     
@@ -61,6 +61,6 @@ def generate_launch_description():
             executable='rviz2',
             name='rviz2',
             output='screen',
-            arguments=['-d', '/home/macroorin3/pass_ws/src/path_plan/rviz/rviz.rviz']
+            arguments=['-d', '/home/macroorin1/pass_ws/src/path_plan/rviz/rviz.rviz']
         ),
     ])

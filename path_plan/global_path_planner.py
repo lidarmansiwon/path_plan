@@ -66,7 +66,7 @@ class GlobalPathPlanner(Node):
         
         self.imu_subscription   = self.create_subscription(
             Imu,
-            '/agent3/imu',
+            '/ouster/imu',
             self.boat_callback,
             qos_profile = qos_profile_sensor_data
         )

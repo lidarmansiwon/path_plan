@@ -7,7 +7,7 @@ from std_msgs.msg import Bool ,Int32, Int64
 from geometry_msgs.msg import PoseStamped, TransformStamped,Point, PointStamped
 from nav_msgs.msg import Path, Odometry,OccupancyGrid
 from ament_index_python.packages import get_package_share_directory
-from mk3_msgs.msg import GuidanceType, NavigationType, WaypointType,PsiToWP
+from mk3_msgs.msg import GuidanceType, NavigationType, WaypointType,PsiToWP, DockingState
 from visualization_msgs.msg import Marker, MarkerArray
 from typing import List, Tuple
 from rclpy.qos import QoSProfile, qos_profile_sensor_data
@@ -25,6 +25,7 @@ class Pose:
 class GlobalPathPlanner(Node):
     def __init__(self):
         super().__init__('global_path_planner')
+        self.DEBUGING = False
         self.declare_parameter('boundary_cost', 2.0)
         self.declare_parameter('lookahead_distance', 0.6)
         self.declare_parameter('scale', 1.0)
@@ -49,7 +50,7 @@ class GlobalPathPlanner(Node):
             Int32, 
             '/path/number', 
             self.dock_number_callback, 
-            qos_profile)
+            10)
         
         self.mode_subscription = self.create_subscription(
             Int64,
@@ -73,7 +74,7 @@ class GlobalPathPlanner(Node):
         
         self.imu_subscription   = self.create_subscription(
             Imu,
-            '/agent3/imu',
+            '/ouster/imu',
             self.boat_callback,
             qos_profile = qos_profile_sensor_data
         )
@@ -101,6 +102,8 @@ class GlobalPathPlanner(Node):
         self.local_map           = None
         self.boat_data           = None
         self.path_state          = True
+        # self.path_data           = Int32
+        # self.path_data.data      = -1.0
         self.path_data           = None
         self.select_mode         = True  # True for selection, False for updating
         self.selected_index      = None
@@ -108,7 +111,9 @@ class GlobalPathPlanner(Node):
         self.current_position    = np.array([0.0, 0.0])
         self.error_psi_d         = 0
 
-        self.tf_broadcaster        = tf2_ros.TransformBroadcaster(self)
+        self.tf_broadcaster                  = tf2_ros.TransformBroadcaster(self)
+        self.state_text_publisher            = self.create_publisher(Marker, '/gpp/state_text', 10)
+        self.docking_state_publisher         = self.create_publisher(DockingState, "/gpp/docking_state", 10)
         self.docking_permit_cmd_publisher    = self.create_publisher(Bool, '/gpp/docking_permit_cmd', 10)
         self.wayPoint_publisher              = self.create_publisher(WaypointType, '/gpp/waypoint', qos_profile = qos_profile_sensor_data)
         self.wayPoint_publisher              = self.create_publisher(WaypointType, '/gpp/waypoint', qos_profile = qos_profile_sensor_data)
@@ -126,12 +131,20 @@ class GlobalPathPlanner(Node):
         self.current_index = 0
         self.docking_index = 0
         self.timer = self.create_timer(0.01, self.process)
-        self.dock1_Reliability = 0
-        self.dock2_Reliability = 0
-        self.dock3_Reliability = 0
+        self.dock1_Reliability = 0.0
+        self.dock2_Reliability = 70.0
+        self.dock3_Reliability = 0.0
 
         self.docking_permit_cmd = Bool()
         self.docking_permit_cmd.data = False
+
+        self.docking_state_data = DockingState()
+
+        self.docking_state_data.docking_permit.data = False
+        self.docking_state_data.dock_1_reliability = self.dock1_Reliability
+        self.docking_state_data.dock_2_reliability = self.dock2_Reliability
+        self.docking_state_data.dock_3_reliability = self.dock3_Reliability
+        self.docking_state_data.selected_dock      = 0.0
 
 
     def process(self):
@@ -148,17 +161,19 @@ class GlobalPathPlanner(Node):
         ''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''''
         
         if (self.navigation_data is None or self.local_map is None or self.path_data is None or self.mode_data is None):
-            print(self.path_data, self.mode_data)
-            if self.start_check == False:
-                print("\033[33m" + " --> " + "\033[0m" + "\033[31m" + "'navigation_data'" + "\033[0m" + "\033[33m" + " doesn't arrived yet" + "\033[0m")
-                self.start_check = True
-                self.data_check += 1
-            if self.data_check % 1000 == 0:
-                print("\033[33m" + " --> " + "\033[0m" + "\033[31m" + "'navigation_data'" + "\033[0m" + "\033[33m" + " doesn't arrived yet" + "\033[0m")
-                self.data_check += 1
-            else:
-                self.data_check += 1
+            if self.DEBUGING == True:
+                print(self.path_data, self.mode_data)
+                if self.start_check == False:
+                    print("\033[33m" + " --> " + "\033[0m" + "\033[31m" + "'navigation_data'" + "\033[0m" + "\033[33m" + " doesn't arrived yet" + "\033[0m")
+                    self.start_check = True
+                    self.data_check += 1
+                if self.data_check % 1000 == 0:
+                    print("\033[33m" + " --> " + "\033[0m" + "\033[31m" + "'navigation_data'" + "\033[0m" + "\033[33m" + " doesn't arrived yet" + "\033[0m")
+                    self.data_check += 1
+                else:
+                    self.data_check += 1
             return
+        # print("dddd")
         
         self.update_boat_state()  
         self.publish_desiredData()
@@ -173,42 +188,56 @@ class GlobalPathPlanner(Node):
             Dock num을 받아 Dock num에 맞는 path file 불러온 뒤, 경유점 선정
             """
             self.get_logger().info("Start Dock Detection", once = True)
+            self.pop, self.nextWP = self.find_point_on_path(self.current_position)  ## POP -->> NED
+            
 
             # 임계값 설정 (예: 10)
-            reliability_threshold = 10
+            reliability_threshold = 50.0
 
             # dock_Reliability 값 증가
             if self.dock_num == 1:
-                self.dock1_Reliability += 1
+                self.dock1_Reliability += 1.0
+                self.docking_state_data.dock_1_reliability = self.dock1_Reliability
             elif self.dock_num == 2:
-                self.dock2_Reliability += 1
+                self.dock2_Reliability += 1.0
+                self.docking_state_data.dock_2_reliability = self.dock2_Reliability
             elif self.dock_num == 3:
-                self.dock3_Reliability += 1
+                self.dock3_Reliability += 1.0
+                self.docking_state_data.dock_3_reliability = self.dock3_Reliability
             elif self.dock_num == -1:
                 return 
-            
+            # print(self.dock1_Reliability,self.dock2_Reliability, self.dock3_Reliability)
             if self.docking_permit_cmd.data == False:
                 # Reliability가 임계값을 넘는지 확인 후 docking_path 할당
                 if self.dock1_Reliability >= reliability_threshold:
                     self.docking_path = self.Dock1_path
                     self.get_logger().info("Dock 1 selected", once=True)
                     self.docking_permit_cmd.data = True
-                    
+                    self.docking_state_data.selected_dock = 1.0
+                    self.docking_state_data.docking_permit.data = True
+
                 elif self.dock2_Reliability >= reliability_threshold:
                     self.docking_path = self.Dock2_path
                     self.get_logger().info("Dock 2 selected", once=True)
                     self.docking_permit_cmd.data = True
+                    self.docking_state_data.selected_dock = 2.0
+                    self.docking_state_data.docking_permit.data = True
 
                 elif self.dock3_Reliability >= reliability_threshold:
                     self.docking_path = self.Dock3_path
                     self.get_logger().info("Dock 3 selected", once=True)
                     self.docking_permit_cmd.data = True
+                    self.docking_state_data.selected_dock = 3.0
+                    self.docking_state_data.docking_permit.data = True
                     
         elif self.mode == 4:
             """
             고정된 self.docking_path로 유도 
             """
             self.pop, self.nextWP = self.find_dock_point_on_path(self.current_position)  # POP -->> NED
+
+
+        self.docking_state_publisher.publish(self.docking_state_data)
         
         self.docking_permit_cmd_publisher.publish(self.docking_permit_cmd)
 
@@ -246,16 +275,17 @@ class GlobalPathPlanner(Node):
 
         return self.docking_path[-1], self.docking_path[-1]
     
-    def dock_number_callback(self,msg : Int32):
-        self.path_data      = msg
-
+    def dock_number_callback(self, msg : Int32):
+        self.path_data      = msg.data
    
     def mode_callback(self,msg : Int64):
         self.mode_data      = msg
 
     def update_docking_state(self):
-        self.dock_num       = self.path_data.data
+        self.dock_num       = self.path_data
         self.mode           = self.mode_data.data
+
+
 
 
     def point_callback(self, msg: PointStamped):
@@ -550,6 +580,35 @@ class GlobalPathPlanner(Node):
         NEXY_WP_vis.lifetime.sec = 0
         NEXY_WP_vis.lifetime.nanosec = int(1e8)
         self.next_WP_publisher.publish(NEXY_WP_vis)
+
+    def vis_text(self, contents, r,g,b, id, x, y, z):
+        state_vis = Marker()
+        state_vis.header.frame_id = "body"  
+        state_vis.header.stamp = self.get_clock().now().to_msg()
+        state_vis.ns = "text_namespace"
+        state_vis.id = id
+        state_vis.type = Marker.TEXT_VIEW_FACING
+        state_vis.action = Marker.ADD
+
+        # 텍스트 위치 설정
+        state_vis.pose.position.x = x
+        state_vis.pose.position.y = y
+        state_vis.pose.position.z = z
+        state_vis.pose.orientation.x = 0.0
+        state_vis.pose.orientation.y = 0.0
+        state_vis.pose.orientation.z = 0.0
+        state_vis.pose.orientation.w = 1.0
+
+        # 텍스트 내용 및 속성 설정
+        state_vis.text = contents  # 표시할 텍스트
+        state_vis.scale.z = 0.4  # 텍스트 크기
+        state_vis.color.a = 1.0  # 투명도
+        state_vis.color.r = r  # 빨간색
+        state_vis.color.g = g  # 녹색
+        state_vis.color.b = b  # 파란색
+
+        # 텍스트 퍼블리시
+        self.state_text_publisher.publish(state_vis)
         
 def main(args=None):
     rclpy.init(args=args)
